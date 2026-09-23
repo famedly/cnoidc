@@ -1,0 +1,30 @@
+cnoidc {{ .Chart.AppVersion }} is being deployed to namespace {{ .Release.Namespace }}.
+
+It obtains its Zitadel project credential from {{ .Values.zapp.url }} using a
+projected service account token with audience {{ .Values.zapp.audience | quote }}.
+For zapp to accept it, this cluster's OpenID discovery documents must be
+reachable by zapp at the cluster's --service-account-issuer URL, and zapp
+must have a grant matching that issuer.
+
+Check readiness (it turns ready once a credential was obtained):
+
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "cnoidc.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs deployment/{{ include "cnoidc.fullname" . }}
+
+Then create applications and roles{{ if .Values.watchNamespace }} in namespace {{ .Values.watchNamespace }}{{ end }}:
+
+  apiVersion: cnoidc.famedly.com/v1alpha1
+  kind: OIDCApplication
+  metadata:
+    name: frontend
+  spec:
+    redirectUris:
+      - https://app.example.com/callback
+
+  apiVersion: cnoidc.famedly.com/v1alpha1
+  kind: ProjectRole
+  metadata:
+    name: admin
+
+The operator writes the client ID, project ID and Zitadel URL to the
+ConfigMap "<name>-oidc", and the role key to "<name>-role".

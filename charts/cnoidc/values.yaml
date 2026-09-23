@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Default values for cnoidc.
+
+image:
+  repository: registry.famedly.net/docker-oss/cnoidc
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# The single zapp server this operator gets its Zitadel project credential
+# from. The operator authenticates with a projected service account token
+# whose audience is `zapp.audience`; zapp verifies it against the cluster's
+# OIDC discovery documents, which therefore have to be served publicly at
+# the cluster's `--service-account-issuer` URL.
+zapp:
+  # Base URL of the zapp server, e.g. https://zapp.example.com. Required.
+  url: ""
+  # Audience the token is minted for; must match zapp's
+  # `verification.audience`.
+  audience: zapp
+  # Timeout in seconds for requests to zapp.
+  timeoutSeconds: 10
+
+# Namespace whose OIDCApplication and ProjectRole resources are managed.
+# Empty watches all namespaces (cluster-wide RBAC); set to restrict the
+# operator to a single namespace (Role/RoleBinding instead of ClusterRole).
+watchNamespace: ""
+
+# How often every resource is re-synced with Zitadel even without a change,
+# in humantime syntax (e.g. "10m", "1h"). Drift in Zitadel is repaired on
+# that cadence.
+syncInterval: 10m
+
+# Log filter (tracing EnvFilter syntax).
+logLevel: cnoidc=info
+
+replicaCount: 1
+
+# The CRDs ship in the chart's `crds/` directory. Helm installs them on
+# `helm install` only and never upgrades or deletes them: after upgrading
+# the chart, apply `charts/cnoidc/crds/` yourself (or pass `--skip-crds`
+# and manage them entirely outside Helm).
+
+serviceAccount:
+  create: true
+  # Defaults to the release's full name.
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+# The health endpoint (/healthz, /readyz).
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+topologySpreadConstraints: []
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Restrict the operator's egress to the API server, zapp and Zitadel.
+# Zitadel's address is only known at runtime (zapp reports it), so allow it
+# through `egress` explicitly.
+networkPolicy:
+  enabled: false
+  # Additional egress rules, appended to the DNS and API server rules.
+  egress: []
+
+# Prometheus Operator ServiceMonitor for the health endpoint. The operator
+# does not expose metrics yet; this only monitors availability.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+# Extra environment variables for the operator container.
+extraEnv: []

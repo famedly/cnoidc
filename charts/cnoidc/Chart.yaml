@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+apiVersion: v2
+name: cnoidc
+description: >-
+  Cloud-native OIDC: a Kubernetes operator that manages OIDC applications and
+  roles in a Zitadel project through custom resources. Every cluster gets its
+  own project, provisioned by a zapp server on the strength of the cluster's
+  service account tokens.
+type: application
+# Both versions are overridden from Cargo.toml when the chart is packaged
+# (`nix build .#chart`).
+version: 0.1.0
+appVersion: 0.1.0
+home: https://github.com/famedly/cnoidc
+sources:
+  - https://github.com/famedly/cnoidc
+keywords:
+  - oidc
+  - zitadel
+  - operator
+  - authentication
+maintainers:
+  - name: Famedly GmbH
+    email: info@famedly.com

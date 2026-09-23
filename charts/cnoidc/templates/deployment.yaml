@@ -1,0 +1,145 @@
+{{/*
+SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cnoidc.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cnoidc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # The operator holds no leader lease; run a single pod at a time so that
+  # two instances never race on the same Zitadel objects.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cnoidc.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cnoidc.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "cnoidc.serviceAccountName" . }}
+      # The operator reads the projected token itself; the default token
+      # for the API server is mounted explicitly below.
+      automountServiceAccountToken: false
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: cnoidc
+          image: {{ include "cnoidc.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - /etc/cnoidc/cnoidc.toml
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            # Zitadel credentials come from zapp; give the first request a
+            # moment before reporting unready.
+            initialDelaySeconds: 5
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cnoidc
+              readOnly: true
+            - name: zapp-token
+              mountPath: /var/run/secrets/cnoidc
+              readOnly: true
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            # Memory-backed scratch space where the Zitadel machine key is
+            # placed for the instant the client library reads it. Nothing
+            # here ever reaches a disk.
+            - name: key-scratch
+              mountPath: /var/run/cnoidc
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cnoidc.fullname" . }}
+        # Token presented to zapp. Its audience makes it useless against
+        # the API server, and the kubelet rotates it in place.
+        - name: zapp-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ .Values.zapp.audience | quote }}
+                  expirationSeconds: 3600
+        # What automountServiceAccountToken would have mounted.
+        - name: kube-api-access
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3607
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        - name: key-scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
