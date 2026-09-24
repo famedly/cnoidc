@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# cnoidc config. In a cluster this file is rendered by the Helm chart; use
+# it by hand for running the operator outside the cluster (it then uses the
+# current kubeconfig context).
+
+# Address the health endpoint (/healthz, /readyz) listens on.
+listen = "127.0.0.1:8080"
+# Namespace whose OIDCApplication and ProjectRole resources are managed.
+# Omit to watch all namespaces.
+#namespace = "shop"
+# How often every resource is re-synced with Zitadel even without a change
+# (humantime syntax). Drift in Zitadel is repaired on that cadence.
+sync_interval = "10m"
+
+[zapp]
+# The zapp server that owns this cluster's Zitadel project.
+url = "https://zapp.example.com"
+# Kubernetes service account token presented to zapp. Its audience must be
+# zapp's `verification.audience`. In a pod: a projected volume, which the
+# kubelet rotates in place. Outside: `kubectl create token cnoidc
+# --audience=zapp > /tmp/token`.
+token_file = "/var/run/secrets/cnoidc/token"
+# Directory the Zitadel machine key received from zapp is placed in for the
+# instant the Zitadel client reads it; removed right after. Use
+# memory-backed storage so the key never touches a disk. Defaults to the
+# system temporary directory.
+key_dir = "/var/run/cnoidc"
+# Timeout in seconds for requests to zapp.
+timeout_secs = 10

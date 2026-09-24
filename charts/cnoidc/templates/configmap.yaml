@@ -1,0 +1,28 @@
+{{/*
+SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+*/}}
+{{- if not .Values.zapp.url }}
+{{- fail "zapp.url is required: the URL of the zapp server that provisions the cluster's Zitadel project" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cnoidc.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cnoidc.labels" . | nindent 4 }}
+data:
+  cnoidc.toml: |
+    listen = "0.0.0.0:8080"
+    {{- with .Values.watchNamespace }}
+    namespace = {{ . | quote }}
+    {{- end }}
+    sync_interval = {{ .Values.syncInterval | quote }}
+
+    [zapp]
+    url = {{ .Values.zapp.url | quote }}
+    token_file = "/var/run/secrets/cnoidc/token"
+    key_dir = "/var/run/cnoidc"
+    timeout_secs = {{ .Values.zapp.timeoutSeconds | int }}

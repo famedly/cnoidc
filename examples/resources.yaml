@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Example resources. Apply with `kubectl apply -f examples/resources.yaml`.
+---
+# A browser single-page application: public client, PKCE, refresh tokens.
+apiVersion: cnoidc.famedly.com/v1alpha1
+kind: OIDCApplication
+metadata:
+  name: frontend
+  namespace: shop
+spec:
+  appType: userAgent
+  authMethod: none
+  redirectUris:
+    - https://shop.example.com/auth/callback
+  postLogoutRedirectUris:
+    - https://shop.example.com/
+  grantTypes:
+    - authorizationCode
+    - refreshToken
+  idTokenRoleAssertion: true
+  idTokenUserinfoAssertion: true
+---
+# A server-side web application with a client secret. The secret lands in
+# the Secret "backend-oidc" (key OIDC_CLIENT_SECRET) next to the ConfigMap.
+apiVersion: cnoidc.famedly.com/v1alpha1
+kind: OIDCApplication
+metadata:
+  name: backend
+  namespace: shop
+spec:
+  appType: web
+  authMethod: basic
+  redirectUris:
+    - https://shop.example.com/api/oauth/callback
+  accessTokenType: jwt
+  accessTokenRoleAssertion: true
+---
+# Roles are identified by key in tokens. This one is called "shop.admin" in
+# Zitadel; its key is published in the ConfigMap "admin-role".
+apiVersion: cnoidc.famedly.com/v1alpha1
+kind: ProjectRole
+metadata:
+  name: admin
+  namespace: shop
+spec:
+  key: shop.admin
+  displayName: Shop administrator
+  group: shop
+---
+# Without a key, the resource name is used.
+apiVersion: cnoidc.famedly.com/v1alpha1
+kind: ProjectRole
+metadata:
+  name: customer
+  namespace: shop
+---
+# Consuming the ConfigMaps and Secret from a workload.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: shop
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: registry.example.com/shop/backend
+          envFrom:
+            # ZITADEL_URL, ZITADEL_ISSUER, ZITADEL_PROJECT_ID,
+            # OIDC_CLIENT_ID, OIDC_APPLICATION_ID
+            - configMapRef:
+                name: backend-oidc
+            # OIDC_CLIENT_ID, OIDC_CLIENT_SECRET
+            - secretRef:
+                name: backend-oidc
+          env:
+            # ZITADEL_ROLE_KEY and ZITADEL_ROLES_CLAIM of the admin role,
+            # prefixed to keep several roles apart.
+            - name: ADMIN_ROLE_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: admin-role
+                  key: ZITADEL_ROLE_KEY
+            - name: ROLES_CLAIM
+              valueFrom:
+                configMapKeyRef:
+                  name: admin-role
+                  key: ZITADEL_ROLES_CLAIM

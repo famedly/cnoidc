@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Famedly GmbH (info@famedly.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+version = 1
+
+# Generated files
+[[annotations]]
+SPDX-FileCopyrightText = "2026 Famedly GmbH (info@famedly.com)"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+path = [
+  "Cargo.lock",
+  "flake.lock",
+  ".gitignore",
+  ".gitattributes",
+  ".pre-commit-config.yaml",
+  ".github/workflows/*.yml",
+  "treefmt.toml",
+  "rustfmt.toml",
+  ".direnv/*",
+  "charts/cnoidc/.helmignore",
+  "charts/cnoidc/crds/*.yaml",
+  "charts/cnoidc/templates/NOTES.txt",
+]
+precedence = "aggregate"
