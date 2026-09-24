@@ -27,7 +27,7 @@ use reqwest::{Method, StatusCode};
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
-use tracing::info;
+use tracing::{debug, info};
 use url::Url;
 
 use crate::crd::{
@@ -41,6 +41,16 @@ use crate::crd::{
 pub struct HttpError {
 	pub status: StatusCode,
 	pub body: String,
+}
+
+/// Zitadel's error ID for an update that would not change anything.
+const NO_CHANGES: &str = "COMMAND-1m88i";
+
+/// Whether `err` is Zitadel rejecting an update because the stored state
+/// already equals the requested one.
+fn is_no_changes(err: &anyhow::Error) -> bool {
+	err.downcast_ref::<HttpError>()
+		.is_some_and(|e| e.status == StatusCode::BAD_REQUEST && e.body.contains(NO_CHANGES))
 }
 
 fn has_status(err: &anyhow::Error, status: StatusCode) -> bool {
@@ -152,26 +162,37 @@ impl OidcSettings {
 			id_token_userinfo_assertion: spec.id_token_userinfo_assertion,
 			dev_mode: spec.dev_mode,
 			additional_origins: spec.additional_origins.clone(),
-			clock_skew: spec.clock_skew.as_deref().map(clock_skew_to_zitadel).transpose()?,
-			back_channel_logout_uri: spec.back_channel_logout_uri.clone(),
+			clock_skew: spec
+				.clock_skew
+				.as_deref()
+				.filter(|s| !s.trim().is_empty())
+				.map(clock_skew_to_zitadel)
+				.transpose()?,
+			// Zitadel reports an unset URI as ""; keep both spellings as `None`.
+			back_channel_logout_uri: spec.back_channel_logout_uri.clone().filter(|s| !s.is_empty()),
 			skip_native_app_success_page: spec.skip_native_app_success_page,
 		})
 	}
 
 	/// Whether `current` (as reported by Zitadel) already matches.
+	pub fn matches(&self, current: &Zitadelappv1OidcConfig) -> bool {
+		self.differences(current).is_empty()
+	}
+
+	/// Names of the settings in which `current` (as reported by Zitadel)
+	/// differs from these.
 	///
 	/// The generated Zitadel types do not implement `PartialEq`, so enums
 	/// are compared by their wire representation.
-	pub fn matches(&self, current: &Zitadelappv1OidcConfig) -> bool {
+	pub fn differences(&self, current: &Zitadelappv1OidcConfig) -> Vec<&'static str> {
 		fn wire<T: serde::Serialize>(value: &T) -> serde_json::Value {
 			serde_json::to_value(value).unwrap_or_default()
 		}
 		fn same_set<T: serde::Serialize>(want: &[T], have: Option<&Vec<T>>) -> bool {
 			let want: Vec<_> = want.iter().map(wire).collect();
 			let have: Vec<_> = have.into_iter().flatten().map(wire).collect();
-			want.len() == have.len()
-				&& want.iter().all(|w| have.contains(w))
-				&& have.iter().all(|h| want.contains(h))
+			// Set semantics: Zitadel may drop duplicates the spec repeats.
+			want.iter().all(|w| have.contains(w)) && have.iter().all(|h| want.contains(h))
 		}
 		fn same_enum<T: serde::Serialize>(want: &T, have: Option<&T>) -> bool {
 			have.is_some_and(|have| wire(have) == wire(want))
@@ -182,22 +203,50 @@ impl OidcSettings {
 		fn opt_str(have: Option<&String>) -> Option<&str> {
 			have.map(String::as_str).filter(|s| !s.is_empty())
 		}
-		same_set(&self.redirect_uris, current.redirect_uris())
-			&& same_set(&self.post_logout_redirect_uris, current.post_logout_redirect_uris())
-			&& same_enum(&self.app_type, current.app_type())
-			&& same_enum(&self.auth_method_type, current.auth_method_type())
-			&& same_set(&self.grant_types, current.grant_types())
-			&& same_set(&self.response_types, current.response_types())
-			&& same_enum(&self.access_token_type, current.access_token_type())
-			&& flag(current.access_token_role_assertion()) == self.access_token_role_assertion
-			&& flag(current.id_token_role_assertion()) == self.id_token_role_assertion
-			&& flag(current.id_token_userinfo_assertion()) == self.id_token_userinfo_assertion
-			&& flag(current.dev_mode()) == self.dev_mode
-			&& same_set(&self.additional_origins, current.additional_origins())
-			&& opt_str(current.clock_skew()).unwrap_or("0s")
-				== self.clock_skew.as_deref().unwrap_or("0s")
-			&& opt_str(current.back_channel_logout_uri()) == self.back_channel_logout_uri.as_deref()
-			&& flag(current.skip_native_app_success_page()) == self.skip_native_app_success_page
+		/// Seconds of a protobuf JSON duration ("5s", "0.5s", "5.000s").
+		fn seconds(duration: Option<&str>) -> Option<f64> {
+			duration.unwrap_or("0s").strip_suffix('s')?.parse().ok()
+		}
+		let checks = [
+			("redirectUris", same_set(&self.redirect_uris, current.redirect_uris())),
+			(
+				"postLogoutRedirectUris",
+				same_set(&self.post_logout_redirect_uris, current.post_logout_redirect_uris()),
+			),
+			("appType", same_enum(&self.app_type, current.app_type())),
+			("authMethodType", same_enum(&self.auth_method_type, current.auth_method_type())),
+			("grantTypes", same_set(&self.grant_types, current.grant_types())),
+			("responseTypes", same_set(&self.response_types, current.response_types())),
+			("accessTokenType", same_enum(&self.access_token_type, current.access_token_type())),
+			(
+				"accessTokenRoleAssertion",
+				flag(current.access_token_role_assertion()) == self.access_token_role_assertion,
+			),
+			(
+				"idTokenRoleAssertion",
+				flag(current.id_token_role_assertion()) == self.id_token_role_assertion,
+			),
+			(
+				"idTokenUserinfoAssertion",
+				flag(current.id_token_userinfo_assertion()) == self.id_token_userinfo_assertion,
+			),
+			("devMode", flag(current.dev_mode()) == self.dev_mode),
+			("additionalOrigins", same_set(&self.additional_origins, current.additional_origins())),
+			(
+				"clockSkew",
+				seconds(opt_str(current.clock_skew())) == seconds(self.clock_skew.as_deref()),
+			),
+			(
+				"backChannelLogoutUri",
+				opt_str(current.back_channel_logout_uri())
+					== self.back_channel_logout_uri.as_deref(),
+			),
+			(
+				"skipNativeAppSuccessPage",
+				flag(current.skip_native_app_success_page()) == self.skip_native_app_success_page,
+			),
+		];
+		checks.into_iter().filter(|(_, same)| !same).map(|(name, _)| name).collect()
 	}
 
 	fn add_body(&self, name: &str) -> ManagementServiceAddOidcAppBody {
@@ -397,18 +446,40 @@ impl ProjectClient {
 		}
 
 		let mut client_secret = None;
-		if !settings.matches(config) {
+		let differences = settings.differences(config);
+		if !differences.is_empty() {
 			let method_changed = serde_json::to_value(config.auth_method_type()).ok()
 				!= serde_json::to_value(Some(&settings.auth_method_type)).ok();
-			self.call::<serde::de::IgnoredAny>(
-				Method::PUT,
-				&format!("projects/{}/apps/{app_id}/oidc_config", self.project_id),
-				Some(settings.update_body()),
-			)
-			.await
-			.context("updating application configuration")?;
-			info!("updated application {name} ({app_id})");
-			changed = true;
+			match self
+				.call::<serde::de::IgnoredAny>(
+					Method::PUT,
+					&format!("projects/{}/apps/{app_id}/oidc_config", self.project_id),
+					Some(settings.update_body()),
+				)
+				.await
+			{
+				Ok(_) => {
+					info!("updated application {name} ({app_id}): {}", differences.join(", "));
+					changed = true;
+				}
+				// Zitadel normalises some settings differently than
+				// `differences` does; its own verdict that nothing would
+				// change means the application is in sync.
+				Err(e) if is_no_changes(&e) => {
+					debug!(
+						"application {name} ({app_id}) reported as differing in {} but Zitadel \
+						 sees no changes",
+						differences.join(", ")
+					);
+					return Ok(SyncedApplication {
+						app_id,
+						client_id,
+						client_secret: None,
+						changed,
+					});
+				}
+				Err(e) => return Err(e.context("updating application configuration")),
+			}
 			// Switching to a secret-based method makes Zitadel generate a
 			// secret that is not returned by the update; fetch a fresh one.
 			if method_changed
@@ -612,6 +683,42 @@ mod tests {
 		assert!(!settings.matches(&drifted));
 		let drifted = current.with_redirect_uris(vec!["https://a/cb".into()]);
 		assert!(!settings.matches(&drifted));
+	}
+
+	#[test]
+	fn settings_match_tolerates_zitadel_normalisation() {
+		let spec: OIDCApplicationSpec = serde_json::from_value(json!({
+			"redirectUris": ["https://a/cb", "https://a/cb"],
+			"clockSkew": "5s",
+			"backChannelLogoutUri": "",
+		}))
+		.expect("valid spec");
+		let settings = OidcSettings::from_spec(&spec).expect("valid settings");
+		let current = Zitadelappv1OidcConfig::new()
+			.with_redirect_uris(vec!["https://a/cb".into()])
+			.with_app_type(V1OidcAppType::Web)
+			.with_auth_method_type(V1OidcAuthMethodType::None)
+			.with_grant_types(vec![V1OidcGrantType::AuthorizationCode])
+			.with_response_types(vec![V1OidcResponseType::Code])
+			.with_access_token_type(V1OidcTokenType::Bearer)
+			.with_clock_skew("5.000s".into())
+			.with_back_channel_logout_uri(String::new());
+		assert_eq!(settings.differences(&current), Vec::<&str>::new());
+		let drifted = current.with_clock_skew("3s".into());
+		assert_eq!(settings.differences(&drifted), vec!["clockSkew"]);
+	}
+
+	#[test]
+	fn no_changes_is_recognised() {
+		let err: anyhow::Error = HttpError {
+			status: StatusCode::BAD_REQUEST,
+			body: r#"{"code":9, "message":"No changes (COMMAND-1m88i)"}"#.into(),
+		}
+		.into();
+		assert!(is_no_changes(&err.context("updating")));
+		let err: anyhow::Error =
+			HttpError { status: StatusCode::BAD_REQUEST, body: "invalid".into() }.into();
+		assert!(!is_no_changes(&err));
 	}
 
 	#[test]
